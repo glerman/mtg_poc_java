@@ -1,6 +1,9 @@
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import db.DBConnectionManager;
 import org.apache.commons.httpclient.util.URIUtil;
+import org.joda.time.DateTime;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.After;
@@ -16,6 +19,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -99,14 +104,63 @@ public class CardCacheTest {
 
 
   @Test
+  /**
+   * Store only one instance for each card came, the one with max multiverseID
+   */
   public void test() throws Exception {
-    Class.forName("com.mysql.jdbc.Driver").newInstance();
-    final Connection conn = DriverManager.getConnection("jdbc:mysql://localhost/mtg?user=root&password=Qwer812$");
-    int lastPage, currPage = 1;
-    final List<Card> cardBlock = Lists.newArrayList();
     final Set<String> cardNamesWithoutMultiverseId = Sets.newHashSet();
+    final Map<String, Card> multiverseIdToCard = Maps.newHashMap();
+
+    readCards(cardNamesWithoutMultiverseId, multiverseIdToCard);
+    handleCardsWithoutMultiverseId(cardNamesWithoutMultiverseId, multiverseIdToCard);
+    writeCardsToDB(multiverseIdToCard);
+  }
+
+  private void writeCardsToDB(final Map<String, Card> multiverseIdToCard) throws SQLException, IllegalAccessException, InstantiationException, ClassNotFoundException {
+
+    try (final Connection conn = DBConnectionManager.getConnection()) {
+      System.out.println("Started writing cards at" + new DateTime());
+      final List<Card> cards = Lists.newArrayList(multiverseIdToCard.values());
+      cards.sort((o1, o2) -> o1.multiverseId - o2.multiverseId);
+
+      final ArrayList<Card> cardBlock = new ArrayList<>(blockSize);
+
+      for (final Card card : cards) {
+        cardBlock.add(card);
+        if (cardBlock.size() == blockSize) {
+          writeBlockToDB(cardBlock, conn);
+        }
+      }
+      if (cardBlock.size() > 0) {
+        writeBlockToDB(cardBlock, conn);
+      }
+      System.out.println("Finished writing cards at" + new DateTime());
+    }
+  }
+
+  private void handleCardsWithoutMultiverseId(final Set<String> cardNamesWithoutMultiverseId, final Map<String, Card> cardToMultiverseId) {
+    int unknownMultiverseIds = cardNamesWithoutMultiverseId.size();
+
+    for (final Iterator<String> iter = cardNamesWithoutMultiverseId.iterator(); iter.hasNext() ;) {
+      final Card card = cardToMultiverseId.get(iter.next());
+      if (card != null && card.multiverseId != null) {
+        unknownMultiverseIds--;
+        iter.remove();
+      }
+    }
+    System.out.println("Real number of cards with unknown multiverse id: " + unknownMultiverseIds);
+    System.out.println(cardNamesWithoutMultiverseId);
+  }
+
+  private void readCards(final Set<String> cardNamesWithoutMultiverseId, final Map<String, Card> cardToMultiverseId) throws IOException {
+    System.out.println("Started reading cards at " + new DateTime());
+    int lastPage, currPage;
+    currPage = 1;
     do {
       try {
+        if (currPage % 10 == 0) {
+          System.out.println("At page " + currPage + " time: " + new DateTime());
+        }
         final String uri = allCardsUri + currPage;
         final String json = CardCache.fetch(uri);
         currPage++;
@@ -121,11 +175,11 @@ public class CardCacheTest {
             cardNamesWithoutMultiverseId.add(cardName);
           } else {
             final int multiverseId = card.getInt("multiverseid");
-            cardBlock.add(new Card(cardName, multiverseId));
+            Card storedCard = cardToMultiverseId.get(cardName);
+            storedCard = storedCard == null || multiverseId > storedCard.multiverseId ? new Card(cardName, multiverseId) : storedCard;
+            //Store only one instance for each card came, the one with max multiverseID
+            cardToMultiverseId.put(cardName, storedCard);
           }
-        }
-        if (cardBlock.size() >= blockSize || currPage == lastPage) {
-          writeBlockToDB(cardBlock, conn);
         }
 
       } catch (final Exception e) {
@@ -133,8 +187,9 @@ public class CardCacheTest {
         throw e;
       }
     } while (currPage <= lastPage);
-    System.out.println(lastPage);
-    System.out.println(cardNamesWithoutMultiverseId);
+
+    System.out.println("Last page is: " + lastPage);
+    System.out.println("Finished reading cards at" + new DateTime());
   }
 
 
@@ -151,13 +206,14 @@ public class CardCacheTest {
       sb.append("(").append(multiverseId).append(",'").append(name).append("'),");
     }
     cardBlock.clear();
-    sb.deleteCharAt(sb.length() - 1);
+    sb.deleteCharAt(sb.length() - 1); // Deleting last comma
     final String query = sb.toString();
 
     try (final Statement stmt = conn.createStatement()) {
       stmt.execute(query);
     } catch (final Exception e) {
       System.out.println("Failed to insert. Error: " + e.getMessage() + " query: " + query);
+      e.printStackTrace();
       throw e;
     } finally {
       System.out.println("Finished writing block at: " + LocalDateTime.now());

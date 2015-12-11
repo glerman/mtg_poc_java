@@ -10,29 +10,30 @@ import org.jsoup.select.Elements;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Created by glerman on 14/11/15.
+ * Created by glerman on 11/12/15.
  */
-public class Runner {
+public class DeckboxParser {
 
-  private static final String BASE_URI = "https://deckbox.org";
+  private final String BASE_URI = "https://deckbox.org";
+  private final DBDeckStore dbDeckStore;
 
-
-  public static void main(String[] args) throws Exception {
-    readAndStoreDecks();
+  public DeckboxParser(final DBDeckStore dbDeckStore) {
+    this.dbDeckStore = dbDeckStore;
   }
 
-  public static void readAndStoreDecks() throws Exception {
-    final long start = System.currentTimeMillis();
-    try(final FileBasedDeckStore deckStore = new FileBasedDeckStore("/Users/glerman/Documents/deckbox_db")) {
+  public void readAndStoreDecks() throws Exception {
+    try {
+      final long start = System.currentTimeMillis();
       // Fetch and parse the first deck search result page
       final String deckSearchUrl = BASE_URI + "/decks/mtg";
       final Document firstDeckSearchPage = fetchUrl(deckSearchUrl);
-      parseDeckSearchResultPage(firstDeckSearchPage, deckStore);
+      parseDeckSearchResultPage(firstDeckSearchPage);
 
       // Parse out next search page url and the number of pages
       final Element paginationControls = firstDeckSearchPage.getElementsByClass("pagination_controls").first();
@@ -47,14 +48,18 @@ public class Runner {
       for (int currPage = 2 ; currPage <= lastPage ; currPage++) {
         final String nextPageUri = BASE_URI + pageLessHref + currPage;
         final Document nextDeckSearchPage = fetchUrl(nextPageUri);
-        parseDeckSearchResultPage(nextDeckSearchPage, deckStore);
+        parseDeckSearchResultPage(nextDeckSearchPage);
       }
       final long minutes = TimeUnit.MILLISECONDS.toMinutes(System.currentTimeMillis() - start);
       System.out.println("Running time:" + minutes + " [min]");
+
+    } finally {
+      dbDeckStore.close();
     }
+
   }
 
-  private static void parseDeckSearchResultPage(final Document deckSearchResultPage, final FileBasedDeckStore deckStore) throws IOException {
+  private void parseDeckSearchResultPage(final Document deckSearchResultPage) throws IOException, SQLException {
     System.out.println("Parsing deck page: " + deckSearchResultPage.baseUri());
     final Elements links = deckSearchResultPage.select("a[href]");
     for(final Element deckLink : links) {
@@ -65,12 +70,12 @@ public class Runner {
         final Element deckNameElem = deckLink.children().last();
         final String deckName = deckNameElem.childNode(0).toString();
         final Document deckPage = fetchUrl(deckUrl);
-        parseDeckPage(deckPage, deckName, deckStore);
+        parseDeckPage(deckPage, deckName);
       }
     }
   }
 
-  private static void parseDeckPage(final Document deckPage, final String deckName, final FileBasedDeckStore deckStore) throws IOException {
+  private void parseDeckPage(final Document deckPage, final String deckName) throws IOException, SQLException {
 
     final Elements possibleCards = deckPage.select("tr:matches(\\d+)");
 
@@ -91,10 +96,10 @@ public class Runner {
 
     final Deck deck = new Deck(deckName, deckPage.baseUri(), mainBoardCards, sideBoardCards);
 
-    deckStore.write(deck);
+    dbDeckStore.addDeck(deck);
   }
 
-  private static List<DeckCard> parseCardTable(final Elements cards) {
+  private List<DeckCard> parseCardTable(final Elements cards) {
     final List<DeckCard> deckCards = new ArrayList<DeckCard>();
     for (final Element card : cards) {
       final String cardName = card.getElementsByClass("card_name").first().childNode(1).childNode(0).toString();
@@ -106,7 +111,7 @@ public class Runner {
     return deckCards;
   }
 
-  private static Document fetchUrl(final String url) throws IOException {
+  private Document fetchUrl(final String url) throws IOException {
     HttpClient client = new HttpClient();
 
     // Create a method instance.

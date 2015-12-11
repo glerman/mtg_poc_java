@@ -1,11 +1,16 @@
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.gson.Gson;
 
+import java.util.ArrayList;
 import java.util.Collection;
 
 /**
  * Created by glerman on 30/11/15.
  */
 public class Deck {
+
+  public static final String CARD_INSTANCES_SEPARATOR = "x";
 
   public final String name;
   public final String originUrl;
@@ -19,15 +24,44 @@ public class Deck {
     this.sideBoard = sideBoard;
   }
 
-  @Override
-  public String toString() {
-    final Gson gson = new Gson();
-    return gson.toJson(this);
-//    final MoreObjects.ToStringHelper toStringHelper = MoreObjects.toStringHelper(this);
-//    toStringHelper.add("name", name).add("originUrl", originUrl).add("mainBoard", mainBoard).add("sideBoard", sideBoard)
-//                  .add("hasSideBoard", hasSideBoard);
-//    return toStringHelper.toString();
+  public String sqlFormat() {
+//    if (mainBoard == null || mainBoard.size() == 0) {
+//      throw new IllegalStateException("Deck " + name + " from " + originUrl + " has no maindeck!!");
+//    }
+
+    final StringBuilder sb = new StringBuilder();
+    //TODO: removing the ' char for the sql format
+    sb.append("'").append(name.replace("'", "")).append("'").append(",")
+    .append("'").append(originUrl).append("'").append(",");
+
+    appendCards(sb, mainBoard).append(",");
+    appendCards(sb, sideBoard);
+
+    return sb.toString();
   }
+
+  public boolean hasSideoard() {
+    return sideBoard != null && sideBoard.size() > 0;
+  }
+
+  public static void main(String[] args) {
+    final Deck deck = new Deck("deck name", "original url",
+                               Lists.newArrayList(new DeckCard(new Card("c1", 231), 3), new DeckCard(new Card("c2", 234), 1)),
+                               Lists.newArrayList(new DeckCard(new Card("s1", 387), 2), new DeckCard(new Card("s2", 765), 2)));
+    System.out.println(deck.sqlFormat());
+  }
+
+  private StringBuilder appendCards(final StringBuilder sb, final Collection<DeckCard> cards) {
+    sb.append("'");
+    if (cards != null && cards.size() > 0) {
+      for (final DeckCard deckCard : cards) {
+        sb.append(deckCard.cardCount).append(CARD_INSTANCES_SEPARATOR).append(deckCard.card.multiverseId).append(",");
+      }
+      sb.deleteCharAt(sb.length() - 1); //Remove last comma
+    }
+    return sb.append("'");
+  }
+
 
   public static Deck fromString(final String deckStr) {
     final Gson gson = new Gson();

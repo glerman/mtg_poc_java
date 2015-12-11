@@ -21,7 +21,7 @@ import java.util.Map;
  */
 public class CardCache {
 
-  private static final Map<String, Integer> cardNameToId = new HashMap<String, Integer>(30 * 1000); //TODO: decide on whether the card name is unique or not
+  private static final Map<String, Integer> cardNameToId = new HashMap<String, Integer>(16 * 1000);
   private static final CloseableHttpClient client = HttpClients.createDefault();
   private static boolean initialized = false;
 
@@ -37,27 +37,32 @@ public class CardCache {
     return cardNameToId;
   }
 
-  private static void init() throws ClassNotFoundException, IllegalAccessException, InstantiationException, SQLException {
+  public static void init() throws ClassNotFoundException, IllegalAccessException, InstantiationException, SQLException {
     Class.forName("com.mysql.jdbc.Driver").newInstance();
-    final Connection conn = DriverManager.getConnection("jdbc:mysql://localhost/mtg?user=root&password=Qwer812$");
+    ResultSet resultSet = null;
+    try (final Connection conn = DriverManager.getConnection("jdbc:mysql://localhost/mtg?user=root&password=Qwer812$")) {
+      final Statement statement = conn.createStatement();
+      resultSet = statement.executeQuery("SELECT cd_id, cd_name FROM cd_card");
 
-    final Statement statement = conn.createStatement();
-    final ResultSet resultSet = statement.executeQuery("SELECT cd_id, cd_name FROM cd_card");
-
-    while(resultSet.next()) {
-      final int cardId = resultSet.getInt(1);
-      final String cardName = resultSet.getString(2);
-      cardNameToId.put(cardName, cardId);
+      while (resultSet.next()) {
+        final int cardId = resultSet.getInt(1);
+        final String cardName = resultSet.getString(3);
+        cardNameToId.put(cardName, cardId);
+      }
+      initialized = true;
+    } finally {
+      if (resultSet != null) {
+        resultSet.close();
+      }
     }
-    initialized = true;
   }
 
   public static String fetch(final String uri) throws IOException {
-
     HttpGet httpget = new HttpGet(uri);
-    final CloseableHttpResponse response = client.execute(httpget);
-    final HttpEntity entity = response.getEntity();
-    return inputStreamToString(entity.getContent());
+    try (final CloseableHttpResponse response = client.execute(httpget)) {
+      final HttpEntity entity = response.getEntity();
+      return inputStreamToString(entity.getContent());
+    }
   }
 
   private static String inputStreamToString(final InputStream is) throws IOException {
