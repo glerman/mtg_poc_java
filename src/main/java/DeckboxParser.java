@@ -59,7 +59,7 @@ public class DeckboxParser {
 
   }
 
-  private void parseDeckSearchResultPage(final Document deckSearchResultPage) throws IOException, SQLException {
+  private void parseDeckSearchResultPage(final Document deckSearchResultPage) throws IOException, SQLException, IllegalAccessException, ClassNotFoundException, InstantiationException {
     System.out.println("Parsing deck page: " + deckSearchResultPage.baseUri());
     final Elements links = deckSearchResultPage.select("a[href]");
     for(final Element deckLink : links) {
@@ -75,7 +75,7 @@ public class DeckboxParser {
     }
   }
 
-  private void parseDeckPage(final Document deckPage, final String deckName) throws IOException, SQLException {
+  private void parseDeckPage(final Document deckPage, final String deckName) throws IOException, SQLException, IllegalAccessException, InstantiationException, ClassNotFoundException {
 
     final Elements possibleCards = deckPage.select("tr:matches(\\d+)");
 
@@ -100,15 +100,24 @@ public class DeckboxParser {
   }
 
   private List<DeckCard> parseCardTable(final Elements cards) {
-    final List<DeckCard> deckCards = new ArrayList<DeckCard>();
+    final List<DeckCard> deckCards = new ArrayList<>();
     for (final Element card : cards) {
       final String cardName = card.getElementsByClass("card_name").first().childNode(1).childNode(0).toString();
       final String cardCount = card.getElementsByClass("card_count").first().childNode(0).toString();
-      final DeckCard deckCard = new DeckCard(cardName, null, Integer.valueOf(cardCount));
+      final String normalizedCardName = normalizeCardName(cardName);
+      final DeckCard deckCard = new DeckCard(normalizedCardName, null, Integer.valueOf(cardCount));
       deckCards.add(deckCard);
     }
 
     return deckCards;
+  }
+
+  private String normalizeCardName(final String cardName) {
+    //TODO: need to handle duel cards and double faces cards better, probably add both to the deck
+    if (cardName.contains("//")) { //Handling duel cards (like 'Wear // Tear'), taking the first one
+      return cardName.split("//")[0].trim();
+    }
+    return cardName;
   }
 
   private Document fetchUrl(final String url) throws IOException {

@@ -7,17 +7,16 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Created by glerman on 11/12/15.
  */
 public class DBDeckStore implements AutoCloseable {
 
-  private final String INSTANCES_IN_DECK_SEPARATOR = "x";
-  Map<String, Integer> deckCache; //TODO: create this cache, using url is costly
+  private static final String INSTANCES_IN_DECK_SEPARATOR = "x";
 
   private final Connection connection;
   private final ArrayList<Deck> decksBlock;
@@ -36,6 +35,7 @@ public class DBDeckStore implements AutoCloseable {
     decksBlock.add(deck);
     if (decksBlock.size() == blockSize) {
       storeDecks(decksBlock);
+      decksBlock.clear();
     }
   }
 
@@ -43,7 +43,7 @@ public class DBDeckStore implements AutoCloseable {
     if (decks.isEmpty()) {
       return;
     }
-    insertDecks(decks);
+    insertDecksAndAddIds(decks);
     updateCardToDecks(decks);
   }
 
@@ -56,6 +56,26 @@ public class DBDeckStore implements AutoCloseable {
     private CardApearancesInDecks(final Appearance mainboardApearence, final Appearance sideboardApearence) {
       this.mainboardApearences = mainboardApearence != null ? Lists.newArrayList(mainboardApearence) : Lists.newArrayList();
       this.sideboardApearences = sideboardApearence != null ? Lists.newArrayList(sideboardApearence) : Lists.newArrayList();
+    }
+
+    public String getMainboardAppearancesString() {
+      return getAppearancesString(mainboardApearences);
+    }
+
+    public String getSideboardAppearancesString() {
+      return getAppearancesString(sideboardApearences);
+    }
+
+    private String getAppearancesString(final List<Appearance> appearances) {
+      if (appearances == null || appearances.isEmpty()) {
+        return "";
+      }
+      final StringBuilder sb = new StringBuilder();
+      for (final Appearance appearance : appearances) {
+        sb.append(appearance.instances).append(INSTANCES_IN_DECK_SEPARATOR).append(appearance.deckDBId).append(",");
+      }
+      sb.deleteCharAt(sb.length() - 1);
+      return sb.toString();
     }
   }
 
@@ -71,84 +91,46 @@ public class DBDeckStore implements AutoCloseable {
 
   private void updateCardToDecks(final List<Deck> decks) throws ClassNotFoundException, SQLException, InstantiationException, IllegalAccessException {
     final Map<Integer, CardApearancesInDecks> cardDBIdToNewApearances = createCardToNewApearances(decks);
-    final Set<Integer> cardDBIds = cardDBIdToNewApearances.keySet();
 
+    try (final Statement statement = connection.createStatement()) {
+    for (final Map.Entry<Integer, CardApearancesInDecks> entry : cardDBIdToNewApearances.entrySet()) {
+        final Integer cardDBId = entry.getKey();
+        final CardApearancesInDecks newAppearances = entry.getValue();
 
-    //TODO: use update with concat instead of get, append and store
-    try (final ResultSet resultSet = getAppearancesFromDB(cardDBIds)) {
-      while(resultSet.next()) {
-        final int cardDBId = resultSet.getInt(1);
-        final String mainboardAppearances = resultSet.getString(2);
-        final String sideboardAppearances = resultSet.getString(3);
-
-        final StringBuilder updatedMainboardAppearances = new StringBuilder(mainboardAppearances);
-        final StringBuilder updatedSideboardAppearances = new StringBuilder(sideboardAppearances);
-
-        final CardApearancesInDecks cardApearancesInDecks = cardDBIdToNewApearances.get(cardDBId);
-        addAppearances(updatedMainboardAppearances, cardApearancesInDecks.mainboardApearences);
-        addAppearances(updatedSideboardAppearances, cardApearancesInDecks.sideboardApearences);
+        final String updateMainboard = String.format("UPDATE cdi_card_decks_index SET cdi_mainboard_appearances = CONCAT(IF(cdi_mainboard_appearances IS NULL, '', cdi_mainboard_appearances), \"%s\") WHERE cdi_card_id=%d", newAppearances.getMainboardAppearancesString(), cardDBId);
+        statement.addBatch(updateMainboard);
+        if (newAppearances.sideboardApearences != null && newAppearances.sideboardApearences.size() > 0) {
+          final String updateSideboard = String.format("UPDATE cdi_card_decks_index SET cdi_sideboard_appearances = CONCAT(IF(cdi_sideboard_appearances IS NULL, '', cdi_sideboard_appearances), \"%s\") WHERE cdi_card_id=%d", newAppearances.getSideboardAppearancesString(), cardDBId);
+          statement.addBatch(updateSideboard);
+        }
       }
+      final int[] updatedRows = statement.executeBatch();
     }
-
-  }
-
-  private void addAppearances(final StringBuilder updatedMainboardAppearances, final List<Appearance> newAppearances) {
-    for (final Appearance appearance : newAppearances) {
-      updatedMainboardAppearances.append(appearance.instances).append(INSTANCES_IN_DECK_SEPARATOR).append(appearance.deckDBId).append(",");
-    }
-  }
-
-  private ResultSet getAppearancesFromDB(final Set<Integer> cardDBIds) throws ClassNotFoundException, SQLException, InstantiationException, IllegalAccessException {
-    final StringBuilder selectBuilder = new StringBuilder("SELECT * FROM cdi_card_decks_index WHERE cdi_card_id IN ");
-    selectBuilder.append("(");
-    for (final Integer cardDBId : cardDBIds) {
-      selectBuilder.append(cardDBId).append(",");
-    }
-    selectBuilder.deleteCharAt(selectBuilder.length() - 1);// Remove last comma
-    selectBuilder.append(")");
-
-    final String selectQuery = selectBuilder.toString();
-
-    ResultSet resultSet;
-    try (final Statement stmt = connection.createStatement()) {
-      resultSet = stmt.executeQuery(selectQuery);
-    } catch (final SQLException e) {
-      System.out.println("Failed to insert. Error: " + e.getMessage() + " query: " + selectQuery);
-      throw e;
-    }
-    return resultSet;
   }
 
   private Map<Integer, CardApearancesInDecks> createCardToNewApearances(final List<Deck> decks) throws ClassNotFoundException, SQLException, InstantiationException, IllegalAccessException {
     final Map<Integer, CardApearancesInDecks> cardToNewApearances = Maps.newHashMap();
     for (final Deck deck : decks) {
       for(final DeckCard mainBoardCard : deck.mainBoard) {
-        final CardApearancesInDecks cardApearences = cardToNewApearances.get(mainBoardCard);
-        final Appearance mainboardApearence = getAppearance(deck, mainBoardCard);
+        final int cardDBId = CardCache.getIdFor(mainBoardCard.card.name);
+        final CardApearancesInDecks cardApearences = cardToNewApearances.get(cardDBId);
+        final Appearance mainboardApearence = new Appearance(deck.dbId, mainBoardCard.cardCount);
         if (cardApearences != null) {
           cardApearences.mainboardApearences.add(mainboardApearence);
         } else {
-          final String name = mainBoardCard.card.name;
-          final Integer cardDBId = CardCache.getIdFor(name);
-          if (cardDBId == null) {
-            System.out.println("No DB id for card name: " + name);
-            continue;
-          }
           cardToNewApearances.put(cardDBId, new CardApearancesInDecks(mainboardApearence, null));
         }
       }
+      if (deck.sideBoard == null) {
+        continue;
+      }
       for(final DeckCard sideBoardCard : deck.sideBoard) {
-        final CardApearancesInDecks cardApearences = cardToNewApearances.get(sideBoardCard);
-        final Appearance sideboardApearence = getAppearance(deck, sideBoardCard);
+        final int cardDBId = CardCache.getIdFor(sideBoardCard.card.name);
+        final CardApearancesInDecks cardApearences = cardToNewApearances.get(cardDBId);
+        final Appearance sideboardApearence = new Appearance(deck.dbId, sideBoardCard.cardCount);
         if (cardApearences != null) {
           cardApearences.sideboardApearences.add(sideboardApearence);
         } else {
-          final String name = sideBoardCard.card.name;
-          final Integer cardDBId = CardCache.getIdFor(name);
-          if (cardDBId == null) {
-            System.out.println("No DB id for card name: " + name);
-            continue;
-          }
           cardToNewApearances.put(cardDBId, new CardApearancesInDecks(null, sideboardApearence));
         }
       }
@@ -156,27 +138,33 @@ public class DBDeckStore implements AutoCloseable {
     return cardToNewApearances;
   }
 
-  private Appearance getAppearance(final Deck deck, final DeckCard card) {
-    final int deckDBId = deckCache.get(deck.originUrl);
-    return new Appearance(deckDBId, card.cardCount);
-  }
-
-  public void insertDecks(final List<Deck> decks) throws SQLException {
-    final StringBuilder queryBuilder = new StringBuilder("INSERT INTO dk_deck (name, dk_origin_url, dk_mainboard, dk_sideboard) VALUES ");
+  public void insertDecksAndAddIds(final List<Deck> decks) throws SQLException {
+    final StringBuilder queryBuilder = new StringBuilder("INSERT INTO dk_deck (dk_name, dk_origin_url, dk_mainboard, dk_sideboard) VALUES ");
 
     for (final Deck deck : decks) {
       queryBuilder.append("(").append(deck.sqlFormat()).append("),");
     }
-    decks.clear();
     queryBuilder.deleteCharAt(queryBuilder.length() - 1); // Deleting last comma
     final String query = queryBuilder.toString();
-
-    try (final Statement stmt = connection.createStatement()) {
+    try (final Statement stmt = connection.prepareStatement(query, Statement.RETURN_GENERATED_KEYS)) {
       blocksStored++;
       if (shouldLogStats()) {
         System.out.println("Started writing block at: " + LocalDateTime.now());
       }
-      stmt.execute(query);
+
+      final int rowsAffected = stmt.executeUpdate(query, Statement.RETURN_GENERATED_KEYS);
+      if (rowsAffected != decks.size()) {
+        throw new RuntimeException("Attempted to insert: " + decks.size() + " decks, rows affected: " + rowsAffected);
+      }
+      try (final ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+        final Iterator<Deck> deckIterator = decks.iterator();
+        while (generatedKeys.next()) {
+          if (!deckIterator.hasNext()) {
+            throw new RuntimeException("Something went wrong in deck insertion or id assignment");
+          }
+          deckIterator.next().setDbId(generatedKeys.getInt(1));
+        }
+      }
     } catch (final SQLException e) {
       System.out.println("Failed to insert. Error: " + e.getMessage() + " query: " + query);
       throw e;

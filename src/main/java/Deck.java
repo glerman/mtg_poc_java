@@ -12,6 +12,7 @@ public class Deck {
 
   public static final String CARD_INSTANCES_SEPARATOR = "x";
 
+  public Integer dbId;
   public final String name;
   public final String originUrl;
   public final Collection<DeckCard> mainBoard;
@@ -25,14 +26,10 @@ public class Deck {
   }
 
   public String sqlFormat() {
-//    if (mainBoard == null || mainBoard.size() == 0) {
-//      throw new IllegalStateException("Deck " + name + " from " + originUrl + " has no maindeck!!");
-//    }
 
     final StringBuilder sb = new StringBuilder();
-    //TODO: removing the ' char for the sql format
-    sb.append("'").append(name.replace("'", "")).append("'").append(",")
-    .append("'").append(originUrl).append("'").append(",");
+    sb.append("\"").append(name).append("\"").append(",")
+    .append("\"").append(originUrl).append("\"").append(",");
 
     appendCards(sb, mainBoard).append(",");
     appendCards(sb, sideBoard);
@@ -52,19 +49,24 @@ public class Deck {
   }
 
   private StringBuilder appendCards(final StringBuilder sb, final Collection<DeckCard> cards) {
-    sb.append("'");
+    sb.append("\"");
     if (cards != null && cards.size() > 0) {
       for (final DeckCard deckCard : cards) {
-        sb.append(deckCard.cardCount).append(CARD_INSTANCES_SEPARATOR).append(deckCard.card.multiverseId).append(",");
+        final int cardDBId = CardCache.getIdFor(deckCard.card.name);
+        sb.append(deckCard.cardCount).append(CARD_INSTANCES_SEPARATOR).append(cardDBId).append(",");
       }
       sb.deleteCharAt(sb.length() - 1); //Remove last comma
     }
-    return sb.append("'");
+    return sb.append("\"");
   }
 
 
   public static Deck fromString(final String deckStr) {
     final Gson gson = new Gson();
     return gson.fromJson(deckStr, Deck.class);
+  }
+
+  public void setDbId(final Integer dbId) {
+    this.dbId = dbId;
   }
 }

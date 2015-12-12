@@ -56,8 +56,17 @@ public class CardCacheTest {
 
 
     final Statement stmt = conn.createStatement();
-    final boolean result = stmt.execute("INSERT INTO cd_card (cd_multiverse_id, cd_name) VALUE (15, 'gal')");
-    System.out.println(result);
+    final String name = "gal's king";
+    final String query = "INSERT INTO string_test (name) VALUE (\"" + name + "\")";
+    System.out.println(query);
+
+    stmt.execute(query);
+
+    final ResultSet resultSet = stmt.executeQuery("SELECT * FROM string_test WHERE name=\"" + name + "\"");
+    resultSet.next();
+    final String actualName = resultSet.getString(1);
+    Assert.assertEquals(name, actualName);
+
   }
 
   @Test
@@ -201,9 +210,8 @@ public class CardCacheTest {
     final StringBuilder sb = new StringBuilder("INSERT INTO cd_card (cd_multiverse_id, cd_name) VALUES ");
 
     for(final Card card : cardBlock) {
-      final String name = card.name.replace("'", ""); //TODO: removing the ' char, keep that in mind when comparing card names
       final Integer multiverseId = card.multiverseId;
-      sb.append("(").append(multiverseId).append(",'").append(name).append("'),");
+      sb.append("(").append(multiverseId).append(",\"").append(card.name).append("\"),");
     }
     cardBlock.clear();
     sb.deleteCharAt(sb.length() - 1); // Deleting last comma
@@ -244,7 +252,7 @@ public class CardCacheTest {
     final Connection conn = DriverManager.getConnection("jdbc:mysql://localhost/mtg?user=root&password=Qwer812$");
 
     final Statement statement = conn.createStatement();
-    final String query = String.format("SELECT cd_id FROM cd_card WHERE cd_name = '%s' ", cardName);
+    final String query = String.format("SELECT cd_id FROM cd_card WHERE cd_name = \"%s\" ", cardName);
     final ResultSet resultSet = statement.executeQuery(query);
 
     if (resultSet.next()) {

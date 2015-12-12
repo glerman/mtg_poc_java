@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Random;
 
 /**
  * Created by glerman on 3/12/15.
@@ -25,11 +26,16 @@ public class CardCache {
   private static final CloseableHttpClient client = HttpClients.createDefault();
   private static boolean initialized = false;
 
-  public static Integer getIdFor(final String cardName) throws ClassNotFoundException, SQLException, InstantiationException, IllegalAccessException {
+  public static int getIdFor(final String cardName) {
     if (!initialized) {
-      init();
+      throw new RuntimeException("CardCache not initialized");
     }
-    return cardNameToId.get(cardName);
+    final Integer cardDBId = cardNameToId.get(cardName);
+    if (cardDBId == null) {
+//      throw new RuntimeException("No DB id for card name: " + cardName);
+      return 17; //TODO
+    }
+    return cardDBId;
   }
 
   static Map<String, Integer> get() throws ClassNotFoundException, SQLException, InstantiationException, IllegalAccessException {
@@ -46,7 +52,7 @@ public class CardCache {
 
       while (resultSet.next()) {
         final int cardId = resultSet.getInt(1);
-        final String cardName = resultSet.getString(3);
+        final String cardName = resultSet.getString(2);
         cardNameToId.put(cardName, cardId);
       }
       initialized = true;
